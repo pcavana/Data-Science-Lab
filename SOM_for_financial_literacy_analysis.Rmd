@@ -1,0 +1,398 @@
+---
+title: "FK_som"
+output:
+  pdf_document: default
+  html_document: default
+date: "2024-06-24"
+---
+
+
+```{r}
+# install.packages("dplyr")
+# install.packages("kohonen")
+# install.packages("aweSOM")
+# install.packages("cluster")
+library(dplyr)
+library(kohonen)
+library(aweSOM)
+library(cluster)
+```
+
+
+# Unsupervised Analyzes
+
+
+```{r}
+# Dataframe reading: select "FL_aggregated_dataset.csv" file
+df_aggr <- read.csv(file.choose(), header = TRUE, sep = ";", dec = ",")
+```
+
+```{r}
+# Extracting FA, FB, FK col only
+
+df_aggr$FA <- as.numeric(df_aggr$FA)
+df_aggr <- df_aggr[,c("FA","FB","FK")]
+```
+
+## SOM building
+
+```{r}
+set.seed(123)
+
+# Values standardization (towards mean and standard deviation)
+df_aggr_norm <- scale(df_aggr)
+
+# Grid definition
+som_grid <- somgrid(xdim = 5, ydim = 5, topo = "hexagonal")
+
+# Som computing
+som_df_aggr <- som(df_aggr_norm, grid = som_grid, rlen = 200, alpha = c(0.05,0.01))
+
+```
+
+
+### Plots and results
+
+```{r}
+set.seed(123)
+
+par(mfrow = c(2, 2))
+
+plot(som_df_aggr, "quality", whatmap = 1, shape = 'straight') # Quality plot
+
+plot(som_df_aggr, type="dist.neighbours", main = "U-matrix", shape = "straight") # U-matrix
+
+plot(som_df_aggr, type="counts", shape = "straight") # Counts plot
+
+plot(som_df_aggr, type="codes", main = c("Codes subdimensions plot"), shape = "straight") # Codes plot
+
+
+plot(som_df_aggr, type="changes") # Iterative training process plot
+
+
+somQuality(som_df_aggr, df_aggr_norm) # function imported from aweSOM package, in order to compute model R-squared index and SOM quantization error
+```
+
+
+#### Component plan
+
+
+```{r}
+# install.packages("dplyr")
+library(dplyr)
+library(kohonen)
+
+set.seed(123)
+
+# Size augmentation of the grid (1)
+som_expanded <- expandMap(som_df_aggr)  
+
+# Training of the expanded map (1)
+som_expanded <- som(df_aggr_norm, grid = som_expanded$grid, init = som_expanded$codes, rlen = 100, alpha = c(0.05, 0.01), keep.data = TRUE)
+
+# Size augmentation of the grid (2)
+som_expanded_bis <- expandMap(som_expanded)  
+
+# Training of the expanded map (2)
+som_expanded_bis <- som(df_aggr_norm, grid = som_expanded_bis$grid, init = som_expanded_bis$codes, rlen = 100, alpha = c(0.05, 0.01), keep.data = TRUE)
+
+
+# Color palette setting
+colors <- tricolor(som_expanded_bis$grid)
+unit_colors <- rgb(colors[, 1], colors[, 2], colors[, 3])
+#plot(som_expanded_bis, type = "mapping", bgcol = unit_colors, main = "SOM with Tricolor")
+
+
+# Component plan plots
+par(mfrow = c(1, 2))
+plot(som_expanded_bis, type = "property", property = getCodes(som_expanded_bis,1)[,1],bgcol = unit_colors, main = "component plan for FA", shape = "straight")
+plot(som_expanded_bis, type = "property", property = getCodes(som_expanded_bis,1)[,2],bgcol = unit_colors, main = "component plan for FB", shape = "straight")
+plot(som_expanded_bis, type = "property", property = getCodes(som_expanded_bis,1)[,3],bgcol = unit_colors, main = "component plan for FK", shape = "straight")
+```
+## Clustering
+
+```{r}
+set.seed(123)
+
+# Saving nodes distances
+codebook_distances <- object.distances(som_df_aggr, "codes")
+
+# Computing the hirerarchical clustering
+hc <- hclust(codebook_distances)
+```
+
+```{r}
+# Computing Silhouette coefficients in the custom K range
+
+sil_width <- numeric(10)
+
+for (k in 2:10) {
+  clusters <- cutree(hc, k)
+  sil <- silhouette(clusters, codebook_distances)
+  sil_width[k] <- mean(sil[, 3])
+}
+
+
+plot(2:10, sil_width[2:10], type = "b", pch = 19, frame = FALSE, 
+     xlab = "Number of clusters", ylab = "Silhouette coefficient",
+     main = "Silhouette method", ylim = c(0, 0.5)) # Plotting Silhouette coefficients 
+
+aweSOMdendrogram(clust = hc, nclass = 3) # Plotting the Dendrogram
+
+```
+
+
+### Plots and results
+```{r}
+set.seed(123)
+
+# Building clusterized codebook plot
+plot_codes <- cutree(hc, 3)
+plot(som_df_aggr, type = "codes", bgcol = rainbow(5) [plot_codes], shape = "straight", main = "Clustered codebooks")
+
+```
+
+```{r}
+set.seed(123)
+# Computing normalized centroid-vectors for each cluster
+
+
+cbooks <- som_df_aggr$codes[[1]]
+cluster_cbooks <- split(cbooks, plot_codes)
+
+cluster_means <- sapply(cluster_cbooks, function(codebook) {
+  colMeans(matrix(unlist(codebook), ncol = ncol(cbooks), byrow = TRUE))
+})
+
+cluster_means
+```
+
+# Supervised Analyzes 
+
+
+
+
+## Age class
+
+
+```{r}
+# Data import and dataframe construction. 
+# Select "FL_aggregated_dataset.csv" file
+set.seed(1234)
+df_aggr_with_Y <- read.csv(file.choose(), header = TRUE, sep = ";", dec = ",")
+df_aggr_with_age <- df_aggr_with_Y[,c("age_label","FA","FB","FK")]
+
+Y <- df_aggr_with_age[,"age_label"]; Y <- as.factor(Y) # separating external variable from score columns
+X <- df_aggr_with_age[, c("FA","FB","FK")]; 
+X_mat <- as.matrix(X)
+```
+
+### SOM building
+
+```{r}
+# SOM building and plots
+set.seed(1234)
+
+
+X_scaled <- scale(X_mat) # Scaling subdimensions values
+
+xyf_eta <- xyf(X_scaled, Y, grid = somgrid(5, 5, "hexagonal"), rlen=200) # Bulding the supervised SOM
+```
+
+#### Plots and results
+
+```{r}
+par(mfrow = c(2, 2))
+plot(xyf_eta, "quality", whatmap = 1, shape = 'straight') # Quality plot
+
+plot(xyf_eta, type="dist.neighbours", main = "U-matrix", shape = "straight") # U-matrix
+
+plot(xyf_eta, type="counts", shape = "straight") # Counts plot
+
+par(mfrow = c(1, 2))
+
+plot(xyf_eta, type="codes", main = c("Codes subdimensions plot","Codebook age labels"), shape = "straight") # Codes plot
+
+somQuality(xyf_eta,X_scaled) # R-squared and Quantization error computing
+
+par(mfrow = c(1, 1))
+
+plot(xyf_eta, type="changes") # Training progress plot
+```
+
+
+### Clustering  
+
+
+```{r}
+# Computing nodes distances
+codebook_distances_eta <- object.distances(xyf_eta, "codes")
+
+# Computing hierarchical clustering
+hc_eta <- hclust(codebook_distances_eta)
+```
+
+
+```{r}
+
+# Computing Silhouette coefficients in iterative increase of K clusters, ranging from 1 to 7
+set.seed(1234)
+
+sil_width <- numeric(7)
+for (k in 2:7) {
+  clusters <- cutree(hc_eta, k)
+  sil <- silhouette(clusters, dist(codebook_distances_eta))
+  sil_width[k] <- mean(sil[, 3])
+}
+
+plot(2:7, sil_width[2:7], type = "b", pch = 19, frame = FALSE, 
+     xlab = "Number of clusters", ylab = "Silhouette coefficient",
+     main = "Silhouette method") # plotting Silhouette coefficients
+
+
+aweSOMdendrogram(clust = hc_eta, nclass = 3) # Plotting the Dendrogram
+```
+
+
+#### Plots and results
+```{r}
+set.seed(1234)
+som_clusters_eta <- cutree(hc_eta, 3)
+
+par(mfrow = c(1, 2))
+plot(xyf_eta, type = "codes", bgcol = rainbow(5)[som_clusters_eta], main = c("Codes subdimension values","Codebook age labels"), shape = "straight")
+
+```
+
+```{r}
+
+# Computing normalized centroid-vectors for each cluster
+
+set.seed(1234)
+
+cbooks_eta <- xyf_eta$codes[[1]];cbooks
+cluster_cbooks_eta <- split(cbooks_eta, som_clusters_eta)
+cluster_cbooks_eta
+
+cluster_means_eta <- sapply(cluster_cbooks_eta, function(codebook) {
+  colMeans(matrix(unlist(codebook), ncol = ncol(cbooks_eta), byrow = TRUE))
+})
+
+cluster_means_eta
+
+```
+
+
+
+
+### Geographical area
+
+```{r}
+# Data import and dataframe construction.
+# Select "FL_aggregated_dataset.csv" file
+
+set.seed(12345)
+df_aggr_with_Y <- read.csv(file.choose(), header = TRUE, sep = ";", dec = ",")
+df_aggr_with_area <- df_aggr_with_Y[,c("geographical_area","FA","FB","FK")]
+
+Y <- df_aggr_with_area[,"geographical_area"]; Y <- as.factor(Y) # Saving external variable
+X <- df_aggr_with_area[, c("FA","FB","FK")] 
+X <- as.matrix(X)
+```
+
+#### SOM building
+```{r}
+
+set.seed(12345)
+
+X_scaled <- scale(X_mat); # Scaling subdimension values
+
+xyf_area <- xyf(X_scaled, Y, grid = somgrid(6, 4, "hexagonal"), rlen=350) # Bulding the supervised SOM
+```
+
+##### Plots and results
+
+```{r}
+par(mfrow = c(2, 2))
+plot(xyf_area, "quality", whatmap = 1, shape = 'straight') # Quality plot
+
+plot(xyf_area, type="dist.neighbours", main = "U-matrix", shape = "straight") # U-matrix
+
+plot(xyf_area, type="counts", shape = "straight") # Counts plot
+
+par(mfrow = c(1, 1))
+
+plot(xyf_area, type="codes", main = c("Codes subdimensions plot","Codebook area labels"), shape = "straight")
+
+somQuality(xyf_area,X_scaled) # Quantization error
+
+par(mfrow = c(1, 1))
+
+plot(xyf_area, type="changes") # Training progress plot
+
+```
+
+#### Clustering
+
+```{r}
+# Computing codebook distances
+codebook_distances_area <- object.distances(xyf_area, "codes")
+
+# Computing hierarchical clustering
+hc_area <- hclust(codebook_distances_area)
+```
+
+
+```{r}
+
+# Computing Silhouette coefficients in iterative increase of K clusters, ranging from 1 to 7
+
+set.seed(12345)
+
+library(cluster)
+help("silhouette")
+sil_width <- numeric(7)
+for (k in 2:7) {
+  clusters <- cutree(hc_area, k)
+  sil <- silhouette(clusters, dist(codebook_distances_area))
+  sil_width[k] <- mean(sil[, 3])
+}
+
+plot(2:7, sil_width[2:7], type = "b", pch = 19, frame = FALSE, 
+     xlab = "Number of clusters", ylab = "Silhouette coefficient",
+     main = "Silhouette method") # Plotting Silhouette coefficients
+
+aweSOMdendrogram(clust = hc_area, nclass = 5) # Plotting the Dendrogram
+```
+
+
+##### Plots and results
+
+```{r}
+set.seed(12345)
+som_clusters_area <- cutree(hc_area, 5)
+
+par(mfrow = c(1, 2))
+plot(xyf_area, type = "codes", bgcol = rainbow(5)[som_clusters_area],
+     main = c("Codes subdimension values","Codebook area labels"), shape = "straight")
+```
+
+```{r}
+# Computing normalized centroid-vectors for each cluster
+
+set.seed(12345)
+
+cbooks_area <- xyf_area$codes[[1]]
+cluster_cbooks_area <- split(cbooks_area, som_clusters_area)
+
+cluster_means_area <- sapply(cluster_cbooks_area, function(codebook) {
+  colMeans(matrix(unlist(codebook), ncol = ncol(cbooks_area), byrow = TRUE))
+})
+
+cluster_means_area
+
+```
+
+
+
+
